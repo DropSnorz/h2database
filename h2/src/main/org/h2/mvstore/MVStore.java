@@ -30,6 +30,8 @@ import java.util.function.Predicate;
 import org.h2.compress.CompressDeflate;
 import org.h2.compress.CompressLZF;
 import org.h2.compress.Compressor;
+import org.h2.engine.Database;
+import org.h2.message.Trace;
 import org.h2.mvstore.type.StringDataType;
 import org.h2.store.fs.FileUtils;
 import org.h2.util.Utils;
@@ -124,6 +126,7 @@ MVStore:
  * A persistent storage for maps.
  */
 public final class MVStore implements AutoCloseable {
+
 
     /**
      * Store is open.
@@ -628,6 +631,7 @@ public final class MVStore implements AutoCloseable {
      *                              -1 means unlimited time (full compaction)
      */
     public void close(int allowedCompactionTime) {
+        Database.tracex.info("MVStore: Closing MVStore");
         if (!isClosed()) {
             if (fileStore != null) {
                 boolean compactFully = allowedCompactionTime == -1;
@@ -644,6 +648,7 @@ public final class MVStore implements AutoCloseable {
 
                 String fileName = fileStore.getFileName();
                 if (compactFully && FileUtils.exists(fileName)) {
+                    Database.tracex.info("Compact fully MVStore");
                     // the file could have been deleted concurrently,
                     // so only compact if the file still exists
                     MVStoreTool.compact(fileName, true);
@@ -690,6 +695,7 @@ public final class MVStore implements AutoCloseable {
                                 commit();
                                 assert oldestVersionToKeep.get() == currentVersion : oldestVersionToKeep.get() + " != "
                                         + currentVersion;
+                                Database.tracex.info("MVStore : Stopping FileStore");
                                 fileStore.stop(allowedCompactionTime);
                             }
 
@@ -699,6 +705,7 @@ public final class MVStore implements AutoCloseable {
                             for (MVMap<?, ?> m : new ArrayList<>(maps.values())) {
                                 m.close();
                             }
+                            Database.tracex.info("MVStore : Maps closed");
                             maps.clear();
                         } finally {
                             if (fileStore != null && fileStoreShallBeClosed) {
@@ -795,8 +802,9 @@ public final class MVStore implements AutoCloseable {
         assert storeLock.isHeldByCurrentThread();
         if (isOpenOrStopping() && hasUnsavedChanges() && storeOperationInProgress.compareAndSet(false, true)) {
             try {
-                @SuppressWarnings({"NonAtomicVolatileUpdate", "NonAtomicOperationOnVolatileField"})
+                //@SuppressWarnings({"NonAtomicVolatileUpdate", "NonAtomicOperationOnVolatileField"})
                 long result = ++currentVersion;
+                Database.tracex.info("MVStore: store() -> Increase current version to " + currentVersion);
                 if (fileStore == null) {
                     setWriteVersion(currentVersion);
                 } else {
@@ -804,7 +812,9 @@ public final class MVStore implements AutoCloseable {
                         throw DataUtils.newMVStoreException(
                                 DataUtils.ERROR_WRITING_FAILED, "This store is read-only");
                     }
+                    Database.tracex.info("MVStore: store() -> FileStore.dropUnusedChunks()");
                     fileStore.dropUnusedChunks();
+                    Database.tracex.info("MVStore: store() -> FileStore.storeNow()");
                     storeNow(syncWrite);
                 }
                 return result;
@@ -1333,6 +1343,7 @@ public final class MVStore implements AutoCloseable {
      */
     public void rollbackTo(long version) {
         storeLock.lock();
+        Database.tracex.info("MVStore : rolling back to " + version);
         try {
             currentVersion = version;
             checkOpen();
@@ -1388,6 +1399,7 @@ public final class MVStore implements AutoCloseable {
     }
 
     void setCurrentVersion(long curVersion) {
+        Database.tracex.info("MVStore  : setCurrentVersion " + curVersion);
         currentVersion = curVersion;
     }
 

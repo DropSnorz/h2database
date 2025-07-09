@@ -96,6 +96,8 @@ import org.h2.value.ValueTimestampTimeZone;
  */
 public final class Database implements DataHandler, CastDataProvider {
 
+    public static Trace tracex;
+
     private static int initialPowerOffCount;
 
     private static final boolean ASSERT;
@@ -306,6 +308,7 @@ public final class Database implements DataHandler, CastDataProvider {
         traceSystem.setLevelFile(traceLevelFile);
         traceSystem.setLevelSystemOut(traceLevelSystemOut);
         trace = traceSystem.getTrace(Trace.DATABASE);
+        tracex = trace;
         trace.info("opening {0} (build {1})", databaseName, Constants.BUILD_ID);
         try {
             if (persistent) {

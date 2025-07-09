@@ -16,6 +16,7 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Queue;
+import org.h2.engine.Database;
 
 /**
  * Class RandomAccessStore.
@@ -183,6 +184,7 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
 
     @Override
     protected void readStoreHeader(boolean recoveryMode) {
+        Database.tracex.info(this.hashCode() + " RAS : readStoreHeader()");
         SFChunk newest = null;
         boolean assumeCleanShutdown = true;
         boolean validStoreHeader = false;
@@ -195,6 +197,12 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
             // the following can fail for various reasons
             try {
                 HashMap<String, String> m = DataUtils.parseChecksummedMap(buff);
+
+                for (Map.Entry entry : m.entrySet())
+                {
+                    Database.tracex.info("RAS : ---- " + entry.getKey() + "=" +entry.getValue());
+                }
+
                 if (m == null) {
                     assumeCleanShutdown = false;
                     continue;
@@ -215,6 +223,7 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
                 }
             } catch (Exception ignore) {
                 assumeCleanShutdown = false;
+                Database.tracex.info("RAS : readStoreHeader() assumeCleanShutdown = false");
             }
         }
 
@@ -229,6 +238,7 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
         assumeCleanShutdown = assumeCleanShutdown && newest != null && !recoveryMode;
         if (assumeCleanShutdown) {
             assumeCleanShutdown = DataUtils.readHexInt(storeHeader, FileStore.HDR_CLEAN, 0) != 0;
+            Database.tracex.info("RAS : readStoreHeader() assumeCleanShutdown=true newest.id=" + newest.id + " newest.version=" + newest.version);
         }
 //        assert getChunks().size() <= 1 : getChunks().size();
 
@@ -264,12 +274,14 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
                 SFChunk c;
                 while (assumeCleanShutdown && (c = chunksToVerify.poll()) != null) {
                     SFChunk test = readChunkHeaderAndFooter(c.block, c.id);
+                    Database.tracex.info("RAS : readStoreHeader()->readChunkHeaderAndFooter() = " + test);
                     assumeCleanShutdown = test != null;
                     if (assumeCleanShutdown) {
                         validChunksByLocation.put(test.block, test);
                     }
                 }
             } catch(IllegalStateException ignored) {
+                Database.tracex.info("RAS : readStoreHeader() Exception:" + ignored.getMessage());
                 assumeCleanShutdown = false;
             }
         } else {
@@ -300,6 +312,7 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
         }
 
         if (!assumeCleanShutdown) {
+            Database.tracex.info("RAS : readStoreHeader() assumeCleanShutdown=false");
             // now we know, that previous shutdown did not go well and file
             // is possibly corrupted but there is still hope for a quick
             // recovery
@@ -337,6 +350,7 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
             }
         }
         assert validateFileLength("on open");
+        Database.tracex.info("RAS : readStoreHeader() completed");
     }
 
     @Override
@@ -370,10 +384,12 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
         boolean shouldWriteStoreHeader = shouldWriteStoreHeader(chunk, storeAtEndOfFile);
         lastChunk = chunk;
         if (shouldWriteStoreHeader) {
+            // Database.tracex.info("RAS : writeChunk->writeStoreHeader()");
             writeStoreHeader();
         }
         if (!storeAtEndOfFile) {
             // may only shrink after the store header was written
+            Database.tracex.info("RAS : writeChunk->shrinkStoreIfPossible()");
             shrinkStoreIfPossible(1);
         }
     }
@@ -412,6 +428,7 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
 
     @Override
     protected final void writeCleanShutdownMark() {
+        Database.tracex.info("RAS : writeCleanShutdownMark->shrinkStoreIfPossible()");
         shrinkStoreIfPossible(0);
         storeHeader.put(HDR_CLEAN, 1);
         writeStoreHeader();
@@ -437,14 +454,20 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
     @Override
     protected void compactStore(int thresholdFillRate, long maxCompactTime, int maxWriteSize, MVStore mvStore) {
         setRetentionTime(0);
+        Database.tracex.info("RAS : compactStore()");
+        int loop = 0;
         long stopAt = System.nanoTime() + maxCompactTime * 1_000_000L;
         while (compact(thresholdFillRate, maxWriteSize)) {
+            loop+=1;
+            Database.tracex.info("RAS : compactStore() -> Starting compaction loop " + loop);
             sync();
             compactMoveChunks(thresholdFillRate, maxWriteSize, mvStore);
             if (System.nanoTime() - stopAt > 0L) {
+                Database.tracex.info("RAS : compactStore() -> Exceeded maxCompactTime");
                 break;
             }
         }
+        Database.tracex.info("RAS : compaction loop completed " + loop);
     }
 
     /**
@@ -461,11 +484,15 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
     public void compactMoveChunks(int targetFillRate, long moveSize, MVStore mvStore) {
         if (isSpaceReused()) {
             mvStore.executeFilestoreOperation(() -> {
+                Database.tracex.info("RAS : compactMoveChunks() -> dropUnusedChunks()");
                 dropUnusedChunks();
                 saveChunkLock.lock();
                 try {
                     if (hasPersistentData() && getFillRate() <= targetFillRate) {
+                        Database.tracex.info("RAS : compactMoveChunks() -> compactMoveChunks(moveSize) getFillRate=" + getFillRate() + ",targetFillRate=" + targetFillRate);
                         compactMoveChunks(moveSize);
+                    } else {
+                        Database.tracex.info("RAS : compactMoveChunks() -> compactMoveChunks skipped getFillRate=" + getFillRate() + ",targetFillRate=" + targetFillRate);
                     }
                 } finally {
                     saveChunkLock.unlock();
@@ -526,7 +553,9 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
 
     private void compactMoveChunks(Iterable<SFChunk> move) {
         assert saveChunkLock.isHeldByCurrentThread();
+        Database.tracex.info("RAS : compactMoveChunks(move)");
         if (move != null) {
+            Database.tracex.info("RAS : compactMoveChunks() -> move is defined");
             // this will ensure better recognition of the last chunk
             // in case of power failure, since we are going to move older chunks
             // to the end of the file
@@ -566,6 +595,7 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
             assert postEvacuationBlockCount >= getAfterLastBlock();
 
             if (movedToEOF) {
+                Database.tracex.info("RAS : compactMoveChunks() -> Moving to EoF");
                 boolean moved = moveChunkInside(chunkToMove, originalBlockCount);
 
                 // store a new chunk with updated metadata (hopefully within a file)
@@ -582,14 +612,18 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
                 if (moveChunkInside(lastChunk, lastBoundary) || moved) {
                     store(lastBoundary, -1);
                 }
+            } else {
+                Database.tracex.info("RAS : compactMoveChunks() -> Move is null, bypassing.");
             }
 
+            Database.tracex.info("RAS : compactMoveChunks()->shrinkIfPossible()");
             shrinkStoreIfPossible(0);
             sync();
         }
     }
 
     private void writeStoreHeader() {
+        Database.tracex.info("RAS : writeStoreHeader()");
         StringBuilder buff = new StringBuilder(112);
         if (hasPersistentData()) {
             storeHeader.put(HDR_BLOCK, lastChunk.block);
@@ -602,6 +636,7 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
         DataUtils.appendMap(buff, HDR_FLETCHER, checksum);
         buff.append('\n');
         bytes = buff.toString().getBytes(StandardCharsets.ISO_8859_1);
+        Database.tracex.info("RAS header: " + buff.toString());
         ByteBuffer header = ByteBuffer.allocate(2 * BLOCK_SIZE);
         header.put(bytes);
         header.position(BLOCK_SIZE);
@@ -696,12 +731,14 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
         if (savedPercent < minPercent) {
             return;
         }
+        Database.tracex.info("RAS : shrinkIfPossible->truncate() end=" + end + " size=" + fileSize);
         sync();
         truncate(end);
     }
 
     @Override
     protected void doHousekeeping(MVStore mvStore) throws InterruptedException {
+        Database.tracex.info("RAS : doHousekeeping()");
         boolean idle = isIdle();
         int rewritableChunksFillRate = getRewritableChunksFillRate();
         if (idle && stopIdleHousekeeping) {

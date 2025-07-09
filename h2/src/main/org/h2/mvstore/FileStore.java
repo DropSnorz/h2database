@@ -7,6 +7,9 @@ package org.h2.mvstore;
 
 import org.h2.engine.Constants;
 import static org.h2.mvstore.MVStore.INITIAL_VERSION;
+
+import org.h2.engine.Database;
+import org.h2.message.Trace;
 import org.h2.mvstore.cache.CacheLongKeyLIRS;
 import org.h2.mvstore.type.StringDataType;
 import org.h2.util.MathUtils;
@@ -44,6 +47,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BiConsumer;
 import java.util.function.IntSupplier;
+import java.util.stream.Collectors;
 import java.util.zip.ZipOutputStream;
 
 /**
@@ -626,6 +630,7 @@ public abstract class FileStore<C extends Chunk<C>>
     }
 
     protected final void setLastChunk(C last) {
+        Database.tracex.info("FileStore : setLastChunk() last.id=" + last.id);
         lastChunk = last;
         chunks.clear();
         lastChunkId = 0;
@@ -665,6 +670,7 @@ public abstract class FileStore<C extends Chunk<C>>
                     }
 
                     if (layout.remove(Chunk.getMetaKey(chunk.id)) != null) {
+                        Database.tracex.info("FileStore : dropUnusedChunk -> mvStore.markMetaChanged() for chunkId=" + chunk.id);
                         mvStore.markMetaChanged();
                     }
                     if (chunk.isAllocated()) {
@@ -672,10 +678,13 @@ public abstract class FileStore<C extends Chunk<C>>
                     }
                 }
             }
+            Database.tracex.info("FileStore : dropUnusedChunks.toBeFreedChunks " + toBeFreed.size());
             if (!toBeFreed.isEmpty()) {
                 saveChunkLock.lock();
                 try {
-                    freeChunkSpace(toBeFreed);
+                   Database.tracex.info("FileStore : dropUnusedChunks free chunk space for : " + toBeFreed.stream().map(p -> String.valueOf(p.id))
+                                                                                             .collect(Collectors.joining(",")));
+                   freeChunkSpace(toBeFreed);
                 } finally {
                     saveChunkLock.unlock();
                 }
@@ -922,7 +931,9 @@ public abstract class FileStore<C extends Chunk<C>>
         }
         lastCommitTime = getTimeSinceCreation();
         mvStore.resetLastMapId(lastMapId());
-        mvStore.setCurrentVersion(lastChunkVersion());
+        long lastChunkVersion = lastChunkVersion();
+        Database.tracex.info("FileStore : start() lastChunkVersion=" + String.valueOf(lastChunkVersion));
+        mvStore.setCurrentVersion(lastChunkVersion);
         MVMap<String, String> metaMap = mvStore.openMetaMap();
         scrubLayoutMap(metaMap);
         return metaMap;
@@ -1141,8 +1152,12 @@ public abstract class FileStore<C extends Chunk<C>>
         if (header != null) {
             C footer = readChunkFooter(block + header.len);
             if (footer == null || footer.id != expectedId || footer.block != header.block) {
+                Database.tracex.info("FileStore : readChunkHeaderAndFooter() failure expectedId=" + expectedId + " footer.id=" + footer.id);
                 return null;
             }
+        } else {
+            Database.tracex.info("Header cannot be found block=" + block + "expectedId=" + expectedId);
+
         }
         return header;
     }
@@ -1157,6 +1172,7 @@ public abstract class FileStore<C extends Chunk<C>>
             C chunk = readChunkHeader(block);
             return chunk.block != block ? null : chunk;
         } catch (Exception ignore) {
+            Database.tracex.info("FileStore : readChunkHeaderOptionally() Exception:" + ignore.getMessage());
             return null;
         }
     }
@@ -1187,6 +1203,7 @@ public abstract class FileStore<C extends Chunk<C>>
                 return chunk;
             }
         } catch (Exception e) {
+            Database.tracex.info("FileStat : readChunkFooter() Exception:" + e.getMessage());
             // ignore
         }
         return null;
@@ -1376,6 +1393,7 @@ public abstract class FileStore<C extends Chunk<C>>
 
     final void storeIt(ArrayList<Page<?,?>> changed, long version, boolean syncWrite) throws ExecutionException {
         lastCommitTime = getTimeSinceCreation();
+        Database.tracex.info("FileStore : StoreIt version=" + version + ",syncWrite=" + String.valueOf(syncWrite));
         serializationExecutorHWM = submitOrRun(serializationExecutor,
                 () -> serializeAndStore(syncWrite, changed, lastCommitTime, version),
                 syncWrite, PIPE_LENGTH, serializationExecutorHWM);
@@ -1432,6 +1450,7 @@ public abstract class FileStore<C extends Chunk<C>>
                 lastChunkId = chunkId;
                 throw t;
             }
+            Database.tracex.info("FileStore : serializeAndStore() c.id=" + c.id + " lastChunkId=" + lastChunkId);
 
             bufferSaveExecutorHWM = submitOrRun(bufferSaveExecutor, () -> storeBuffer(c, buff),
                     syncRun, 5, bufferSaveExecutorHWM);
@@ -1525,7 +1544,9 @@ public abstract class FileStore<C extends Chunk<C>>
             buff.put(c.getFooterBytes());
             buff.position(0);
 
+            Database.tracex.info("FileStore: storeBuffer() c.id=" + c.id);
             writeChunk(c, buff);
+
             lastChunk = c;
         } catch (MVStoreException e) {
             mvStore.panic(e);
@@ -1852,6 +1873,7 @@ public abstract class FileStore<C extends Chunk<C>>
 
     protected boolean rewriteChunks(int writeLimit, int targetFillRate) {
         serializationLock.lock();
+        Database.tracex.info("FileStore : rewriteChunks()");
         try {
             MVStore.TxCounter txCounter = mvStore.registerVersionUsage();
             try {
