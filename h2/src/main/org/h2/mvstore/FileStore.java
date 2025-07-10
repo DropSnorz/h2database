@@ -642,7 +642,8 @@ public abstract class FileStore<C extends Chunk<C>>
         deadChunks.offer(chunk);
     }
 
-    public final void dropUnusedChunks() {
+    public final boolean dropUnusedChunks() {
+        boolean chunksDropped = false;
         if (!deadChunks.isEmpty()) {
             long oldestVersionToKeep = mvStore.getOldestVersionToKeep();
             long time = getTimeSinceCreation();
@@ -675,12 +676,15 @@ public abstract class FileStore<C extends Chunk<C>>
             if (!toBeFreed.isEmpty()) {
                 saveChunkLock.lock();
                 try {
+                    chunksDropped = true;
                     freeChunkSpace(toBeFreed);
                 } finally {
                     saveChunkLock.unlock();
                 }
             }
         }
+
+        return chunksDropped;
     }
 
     private static <C extends Chunk<C>> boolean canOverwriteChunk(C c, long oldestVersionToKeep) {

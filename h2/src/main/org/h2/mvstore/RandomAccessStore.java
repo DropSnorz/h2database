@@ -461,10 +461,10 @@ public abstract class RandomAccessStore extends FileStore<SFChunk>
     public void compactMoveChunks(int targetFillRate, long moveSize, MVStore mvStore) {
         if (isSpaceReused()) {
             mvStore.executeFilestoreOperation(() -> {
-                dropUnusedChunks();
+                boolean chunksDropped = dropUnusedChunks();
                 saveChunkLock.lock();
                 try {
-                    if (hasPersistentData() && getFillRate() <= targetFillRate) {
+                    if (hasPersistentData() && (chunksDropped || getFillRate() <= targetFillRate)) {
                         compactMoveChunks(moveSize);
                     }
                 } finally {
